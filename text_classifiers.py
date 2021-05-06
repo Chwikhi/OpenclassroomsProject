@@ -1,15 +1,19 @@
-#LogisticRegression and naivebayesclassifier used for 2 labels data (0, 1)
-#we use Knn RandomForest SVC and MLPClassifier
+
+### chargement des données
 from sklearn.datasets import fetch_rcv1
-import numpy as np
 dataset = fetch_rcv1(shuffle=True, random_state=1)
 
-X = dataset.data[0:1000]
-ym = dataset.target[0:1000]
+
+### Prétraitement des données
+import numpy as np
+from sklearn.model_selection import train_test_split
+
+X = dataset.data[0:10000]
+ym = dataset.target[0:10000]
 topics = dataset.target_names
 y = []
 
-for i in range(1000):
+for i in range(10000):
     t = False
     for j in range(103):
         if (t==False) and (ym[i, j] == 1):
@@ -21,58 +25,80 @@ print(len(y))
 y = np.array(y)
 y = y.reshape(y.shape[0], 1)
 
-from sklearn.model_selection import train_test_split
 Xtrain, Xtest, ytrain, ytest = train_test_split(X, y, test_size=0.3)
 
 
+### Préparation des modèles
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score
-
-mlp_classifier = MLPClassifier(solver='adam', alpha=1e-5, hidden_layer_sizes=(5, 2), random_state=1)
-mlp_classifier.fit(Xtrain, ytrain)
-ypred_mlp = mlp_classifier.predict(Xtest)
-
-print(accuracy_score(ytest, ypred_mlp))
-print("MLP_Classifier accuracy {:.2f}".format(accuracy_score(ytest, ypred_mlp)))
-
-
-
-
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
-rfc = RandomForestClassifier(n_estimators=500, oob_score=True)
-model = rfc.fit(Xtrain, ytrain)
-ypred = rfc.predict(Xtest)
-print("RandomForest accuracy {:.2f}".format(accuracy_score(ytest, ypred)))
-
-
-
-from sklearn import neighbors, metrics
-from sklearn import model_selection
-
-param_grid = {'n_neighbors':[3, 5, 7, 9, 11, 13, 15]}
-score = 'accuracy'
-clf = model_selection.GridSearchCV(neighbors.KNeighborsClassifier(), param_grid, cv=5, scoring=score)
-clf.fit(Xtrain, ytrain)
-
-print("Knn  hyperparamètre(s) sur le jeu d'entraînement:")
-print(clf.best_params_)
-
-ypred_knn = clf.predict(Xtest)
-print("Knn Sur le jeu de test : {:.3f}".format(accuracy_score(ytest, ypred_knn)))
-
-
-from sklearn.model_selection import GridSearchCV 
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 from sklearn.multiclass import OneVsRestClassifier
-score = 'accuracy'
-params = {'SVC__C': np.logspace(-3, 3, 7), 'SVC__penalty':['l1','l2'] }
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.decomposition import LatentDirichletAllocation, PCA
 
-svm = OneVsRestClassifier(SVC())
-gs_svm = GridSearchCV(svm, param_grid=params, cv=5, scoring=score)
 
-gs_svm.fit(Xtrain, ytrain)
-print(gs_svm.best_params_)
+preprocessor = make_pipeline(FunctionTransformer((lambda e : e*150)),
+                             LatentDirichletAllocation(max_iter=5, 
+                                                       learning_method='online',
+                                                       random_state=0))
 
-ypred_svm = gs_svm.predict(Xtest)
-print("\nSur le jeu de test : {:.3f}".format(metrics.accuracy_score(ytest, ypred_svm)))
+
+Hyper_params_SVC = {'svc__gamma':[1e-3,1e-4], 'svc__C':[1, 10, 100, 1000, 10000]}
+Hyper_params_MLP = {'mlpclassifier__beta_1':np.linspace(1e-3, 0.99, 3), 
+                    'mlpclassifier__beta_2':np.linspace(0.5, 0.99, 3),
+                    'mlpclassifier__alpha':[1e-2, 1e-3]}
+Hyper_params_knn = {'kneighborsclassifier__n_neighbors':[1, 3, 5, 7, 9]}
+Hyper_params_RF = {'randomforestclassifier__n_estimators':[200, 300, 400]}
+Hyper_params_Tree = {'decisiontreeclassifier__criterion':['gini', 'entropy']}
+
+
+MLPClassifier = make_pipeline(preprocessor, MLPClassifier(random_state=0, max_iter=400,
+                                                          solver='adam', shuffle=True))
+RandomForestClassifier = make_pipeline(preprocessor, RandomForestClassifier(random_state=0))
+KNN = make_pipeline(preprocessor, KNeighborsClassifier())
+Tree = make_pipeline(preprocessor, DecisionTreeClassifier(random_state=0))
+SVM = make_pipeline(preprocessor, OneVsRestClassifier(SVC()))
+
+# Modèle optimisés
+TreeCV = GridSearchCV(Tree, param_grid=Hyper_params_Tree, cv=5, scoring='accuracy')
+MLPClassifierCV = RandomizedSearchCV(MLPClassifier, param_distributions=Hyper_params_MLP,
+                                     cv=5, scoring='accuracy', n_iter=12)
+RandomForestClassifierCV = GridSearchCV(RandomForestClassifier, param_grid=Hyper_params_RF,
+                                        cv=5, scoring='accuracy')
+KNNCV = GridSearchCV(KNN, param_grid=Hyper_params_knn, cv= 5, scoring='accuracy')
+SVMCV = RandomizedSearchCV(SVM, param_distributions=Hyper_params_SVC,
+                           cv= 5, scoring='accuracy', n_iter=4)
+
+
+## Evaluation des différents modéles
+
+def evaluation(model):
+    model.fit(Xtrain, ytrain)
+    ypred = model.predict(Xtest)
+    print(model)
+    print('accuracy = ',accuracy_score(ytest, ypred))
+    print(classification_report(ytest, ypred))
+    
+def evaluationCV(model):
+    model.fit(Xtrain, ytrain)
+    ypred = model.best_estimator_.predict(Xtest)
+    print(model)
+    print(model.best_params_)
+    print('accuracy = ',accuracy_score(ytest, ypred))
+    print(classification_report(ytest, ypred))
+    
+Model_List = [Tree, MLPClassifier, RandomForestClassifier, KNN, SVM]
+Model_List_CV = [TreeCV, MLPClassifierCV, RandomForestClassifierCV, KNNCV, SVMCV]
+
+for model in Model_List:
+    evaluation(model)
+for model in Model_List_CV:
+    evaluationCV(model)
+    
+#########
+
